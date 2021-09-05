@@ -14,6 +14,7 @@ COLOR_SENTINEL = object()
 aqua = blue = brown = gray = green = lime = orange = pink = purple = red = sky = yellow = COLOR_SENTINEL
 Color = enum.Enum('Color', [k for k, v in locals().items() if v is COLOR_SENTINEL and k != 'COLOR_SENTINEL'])
 locals().update({e.name: e for e in Color})
+mx_color_len = max(len(e.name) for e in Color)
 
 
 class PriorityQueue:
@@ -45,6 +46,16 @@ class Stack:
         return self.__heap.pop()
 
 
+class Move:
+    def __init__(self, color, init, final):
+        self.color = color
+        self.init = init
+        self.final = final
+
+    def __repr__(self):
+        return f'{self.color} from {self.init + 1} to {self.final + 1}'
+
+
 class Layout:
     @staticmethod
     def random(n_colors):
@@ -56,6 +67,7 @@ class Layout:
     def from_level_detail(level_detail):
         assert all(len(e) == 4 for e in level_detail)
         assert all(e == 4 for e in collections.Counter(f for e in level_detail for f in e).values())
+
         buckets = dict(enumerate(level_detail))
         buckets.update({len(level_detail): [], len(level_detail) + 1: []})
         return Layout(buckets)
@@ -75,7 +87,10 @@ class Layout:
         return self.hash == other.hash
 
     def __repr__(self):
-        return '\n'.join(str(i) + ': ' + ' '.join(e.name for e in self.buckets[i]) for i in range(self.n_buckets))
+        return '\n'.join(
+            f'{i + 1:>3}. ' + ' '.join(f'{e.name:<{mx_color_len}}' for e in self.buckets[i])
+            for i in range(self.n_buckets)
+        )
 
     def get_moves_and_resulting_layouts(self):
         res = []
@@ -93,7 +108,7 @@ class Layout:
                 n_bucks[i_buck] = copy.copy(n_bucks[i_buck])
                 n_bucks[f_buck] = copy.copy(n_bucks[f_buck])
                 n_bucks[f_buck].append(n_bucks[i_buck].pop())
-                res.append((f'{i_col.name} in {i_buck} to {f_buck}', Layout(n_bucks)))
+                res.append((Move(i_col.name, i_buck, f_buck), Layout(n_bucks)))
         random.shuffle(res)
         return res
 
@@ -171,12 +186,12 @@ def main():
         [purple, aqua, red, brown]
     ]
     layout = Layout.from_level_detail(level_detail)
-    print('Layout')
+    print('Layout:')
     print(layout)
     print()
 
     start = SearchState(layout, None, None, 0)
-    end = search(start, False)
+    end = search(start, True)
     if not end:
         print('No solution')
         return
@@ -185,9 +200,8 @@ def main():
     while cur.parent:
         moves.insert(0, cur.move)
         cur = cur.parent
-    print('Solution:')
-    print(len(moves))
-    print('\n'.join(moves))
+    print(f'Solution in {len(moves)} moves:')
+    print('\n'.join(f'{i:>3}. {e}' for i, e in enumerate(moves, 1)))
 
 
 if __name__ == '__main__':
