@@ -2,90 +2,105 @@
 # -*- coding: utf-8 -*-
 
 
+import collections
+import copy
+import enum
+import heapq
 import itertools
 import random
-import heapq
 
 
-N_COLORS = 3
-N_BUCKETS = 5
-FULL_VISIBILITY = True
+COLOR_SENTINEL = object()
+aqua = blue = brown = gray = green = lime = orange = pink = purple = red = sky = yellow = COLOR_SENTINEL
+Color = enum.Enum('Color', [k for k, v in locals().items() if v is COLOR_SENTINEL and k != 'COLOR_SENTINEL'])
+locals().update({e.name: e for e in Color})
 
 
-class PQ:
+class PriorityQueue:
     def __init__(self):
         self.__heap = []
-        self.__dict = {}
-        self.__count = itertools.count()
+        self.__counter = itertools.count()
 
     def __len__(self):
-        return len(self.__dict)
-
-    def __remove(self, item):
-        elem = self.__dict.pop(item)
-        elem[-1] = None
+        return len(self.__heap)
 
     def push(self, item, priority):
-        if item in self.__dict:
-            if self.__dict[item][0] <= priority:
-                return
-            self.__remove(item)
-        elem = [priority, next(self.__count), item]
-        heapq.heappush(self.__heap, elem)
-        self.__dict[item] = elem
+        heapq.heappush(self.__heap, (priority, next(self.__counter), item))
 
     def pop(self):
-        while self.__heap:
-            priority, _, item = heapq.heappop(self.__heap)
-            if item is not None:
-                del self.__dict[item]
-                return item, priority
-        raise KeyError('PQ Empty')
+        return heapq.heappop(self.__heap)[2]
+
+
+class Stack:
+    def __init__(self):
+        self.__heap = []
+
+    def __len__(self):
+        return len(self.__heap)
+
+    def push(self, item, priority):
+        self.__heap.append(item)
+
+    def pop(self):
+        return self.__heap.pop()
 
 
 class Layout:
-    def __init__(self):
-        balls = range(N_COLORS) * 4
+    @staticmethod
+    def random(n_colors):
+        balls = [Color(i) for i in range(1, n_colors + 1)] * 4
         random.shuffle(balls)
-        self.buckets = {i: [] for i in range(N_BUCKETS)}
-        self.buckets.update({i: balls[i * 4:(i + 1) * 4] for i in range(len(balls) // 4)})
+        return Layout.from_level_detail([balls[i * 4:(i + 1) * 4] for i in range(len(balls) // 4)])
+
+    @staticmethod
+    def from_level_detail(level_detail):
+        assert all(len(e) == 4 for e in level_detail)
+        assert all(e == 4 for e in collections.Counter(f for e in level_detail for f in e).values())
+        buckets = dict(enumerate(level_detail))
+        buckets.update({len(level_detail): [], len(level_detail) + 1: []})
+        return Layout(buckets)
+
+    def __init__(self, buckets):
+        self.buckets = buckets
+
+        self.n_buckets = len(buckets)
+        self.n_colors = self.n_buckets - 2
+        self.hash = hash(tuple(sorted(tuple(e.value for e in self.buckets[i]) for i in range(self.n_buckets))))
+        self.is_organized = all(len(set(e)) <= 1 for e in self.buckets.values())
 
     def __hash__(self):
-        # maybe slower than it needs to be
-        return hash(tuple(tuple(self.buckets[i]) for i in range(N_BUCKETS)))
+        return self.hash
 
     def __eq__(self, other):
-        # maybe slower than it needs to be
-        return self.buckets == other.buckets
+        return self.hash == other.hash
 
     def __repr__(self):
-        return '\n'.join(str(self.buckets[i]) for i in range(N_BUCKETS))
-
-    def is_organized(self):
-        # maybe slower than it needs to be
-        return all(len(set(e)) <= 1 for e in self.buckets.values())
+        return '\n'.join(str(i) + ': ' + ' '.join(e.name for e in self.buckets[i]) for i in range(self.n_buckets))
 
     def get_moves_and_resulting_layouts(self):
         res = []
-        for i_buck in range(N_BUCKETS):
+        for i_buck in range(self.n_buckets):
             if len(self.buckets[i_buck]) == 0:
                 continue
             i_col = self.buckets[i_buck][-1]
-            for f_buck in range(N_BUCKETS):
+            for f_buck in range(self.n_buckets):
                 if f_buck == i_buck or len(self.buckets[f_buck]) == 4:
                     continue
                 if len(self.buckets[f_buck]) != 0 and self.buckets[f_buck][-1] != i_col:
                     continue
                 # this is going to be the slowest part
-                n_lay = {k: list(v) for k, v in self.buckets.items()}
-                n_lay[f_buck].append(n_lay[i_buck].pop())
-                res.append((f'{i_col} in {i_buck} to {f_buck}', n_lay))
+                n_bucks = copy.copy(self.buckets)
+                n_bucks[i_buck] = copy.copy(n_bucks[i_buck])
+                n_bucks[f_buck] = copy.copy(n_bucks[f_buck])
+                n_bucks[f_buck].append(n_bucks[i_buck].pop())
+                res.append((f'{i_col.name} in {i_buck} to {f_buck}', Layout(n_bucks)))
+        random.shuffle(res)
         return res
 
     def get_dist_to_organized_heuristic(self):
         # could improve this heuristic
         # right now it assumes you could directly move all balls of a color to the tube with the max of that color
-        return sum(4 - max(len(f == i for f in e) for e in self.buckets.values()) for i in range(N_COLORS))
+        return sum(4 - max(len([f == i for f in e]) for e in self.buckets.values()) for i in range(self.n_colors))
 
 
 class SearchState:
@@ -105,7 +120,7 @@ class SearchState:
         return True
 
     def is_finished(self):
-        return self.layout.is_organized()
+        return self.layout.is_organized
 
     def get_neighbors(self):
         return [SearchState(f, self, e, self.dist + 1) for e, f in self.layout.get_moves_and_resulting_layouts()]
@@ -114,24 +129,25 @@ class SearchState:
         return self.dist
 
     def get_dist_to_finish_heuristic(self):
-        # note that this implementation of non-full visibility is naive because we could remember what we have seen
-        if not FULL_VISIBILITY:
-            return 0
+        # this would be where we would return a different heuristic if we don't have full visibility
+        # just returning 0 would be naive in that case because we could remember what we have seen
         return self.layout.get_dist_to_organized_heuristic()
 
 
-def search(start):
-    q = PQ()
+def search(start, optimal):
+    if optimal:
+        q = PriorityQueue()
+    else:
+        q = Stack()
     q.push(start, start.get_dist_from_start())
     vis = set()
     while q:
-        curr, _ = q.pop()
+        curr = q.pop()
         if not curr.is_valid():
             continue
         if curr in vis:
             continue
         vis.add(curr)
-        curr.process()
         if curr.is_finished():
             return curr
         for nbor in curr.get_neighbors():
@@ -140,15 +156,37 @@ def search(start):
 
 
 def main():
-    layout = Layout()
+    level_detail = [
+        [green, pink, red, purple],
+        [green, orange, red, lime],
+        [orange, green, brown, gray],
+        [pink, yellow, purple, pink],
+        [gray, orange, blue, lime],
+        [blue, lime, yellow, sky],
+        [sky, blue, aqua, brown],
+        [sky, red, blue, gray],
+        [brown, orange, aqua, purple],
+        [lime, aqua, sky, pink],
+        [green, yellow, yellow, gray],
+        [purple, aqua, red, brown]
+    ]
+    layout = Layout.from_level_detail(level_detail)
+    print('Layout')
+    print(layout)
+    print()
+
     start = SearchState(layout, None, None, 0)
-    end = search(start)
+    end = search(start, False)
+    if not end:
+        print('No solution')
+        return
     cur = end
     moves = []
-    while cur:
+    while cur.parent:
         moves.insert(0, cur.move)
         cur = cur.parent
-    print(layout)
+    print('Solution:')
+    print(len(moves))
     print('\n'.join(moves))
 
 
